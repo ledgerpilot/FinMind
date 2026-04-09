@@ -1,0 +1,94 @@
+name: Backend Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    paths:
+      - 'packages/backend/**'
+      - '.github/workflows/backend-tests.yml'
+  pull_request:
+    paths:
+      - 'packages/backend/**'
+      - '.github/workflows/backend-tests.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  test:
+    name: Run Pytest on packages/backend/
+    runs-on: ubuntu-latest
+    services:
+      # Provision Redis for background job queue (e.g., RQ) testing
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      # Provision PostgreSQL for database access during tests
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: testdb
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11" # Specify Python version for backend
+          cache: 'pip'
+          cache-dependency-path: packages/backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: packages/backend
+        run: pip install -r requirements.txt
+
+      - name: Wait for services
+        # Wait for Redis and Postgres to be ready before running tests
+        run: |
+          echo "Waiting for Redis to be ready..."
+          until nc -z localhost 6379; do
+            echo "Redis not ready, sleeping..."
+            sleep 1
+          done
+          echo "Redis is ready!"
+          echo "Waiting for Postgres to be ready..."
+          until nc -z localhost 5432; do
+            echo "Postgres not ready, sleeping..."
+            sleep 1
+          done
+          echo "Postgres is ready!"
+
+      - name: Run backend tests
+        working-directory: packages/backend
+        env:
+          # Environment variables for the test run, including database and Redis connection
+          DATABASE_URL: postgresql://testuser:testpassword@localhost:5432/testdb
+          REDIS_URL: redis://localhost:6379/0
+        run: pytest # Assumes pytest is used for backend tests
+
+      - name: Upload Pytest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-pytest-report
+          path: packages/backend/pytest-report.xml # Path to JUnit XML report, if generated
+          if-no-files-found: ignore
