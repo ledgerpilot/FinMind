@@ -21,16 +21,22 @@ export type BudgetSuggestion = {
   net_flow?: number;
 };
 
-export type WeeklySummary = {
-  week_start: string; // YYYY-MM-DD (Monday)
-  total_spending: number;
-  income: number;
+export type WeeklyFinancialSummary = {
+  year_week: string; // e.g., "2023-W01"
+  total_expenses: number;
+  total_income: number;
   net_flow: number;
-  top_categories: Array<{ category_id: string; amount: number }>;
-  week_over_week_change_pct: number;
-  insights: string[];
+  top_expenses_by_category: Array<{ category_id: string; amount: number }>;
+  spending_trend: {
+    last_week_expenses: number;
+    change_pct: number;
+    trend_description: string;
+  };
+  insights?: string[];
+  recommendations?: string[];
   persona?: string;
-  method: 'gemini' | 'heuristic' | 'heuristic_fallback' | string;
+  method: 'gemini' | 'heuristic' | string;
+  warnings?: string[];
 };
 
 export async function getBudgetSuggestion(params?: {
@@ -45,14 +51,14 @@ export async function getBudgetSuggestion(params?: {
   return api<BudgetSuggestion>(`/insights/budget-suggestion${monthQuery}`, { headers });
 }
 
-export async function getWeeklySummary(params?: {
-  week?: string; // YYYY-MM-DD (Monday)
+export async function getWeeklyFinancialSummary(params?: {
+  yearWeek?: string; // e.g., "2023-W01"
   geminiApiKey?: string;
   persona?: string;
-}): Promise<WeeklySummary> {
-  const weekQuery = params?.week ? `?week=${encodeURIComponent(params.week)}` : '';
+}): Promise<WeeklyFinancialSummary> {
+  const weekQuery = params?.yearWeek ? `?week=${encodeURIComponent(params.yearWeek)}` : '';
   const headers: Record<string, string> = {};
   if (params?.geminiApiKey) headers['X-Gemini-Api-Key'] = params.geminiApiKey;
   if (params?.persona) headers['X-Insight-Persona'] = params.persona;
-  return api<WeeklySummary>(`/insights/weekly-summary${weekQuery}`, { headers });
+  return api<WeeklyFinancialSummary>(`/insights/weekly-summary${weekQuery}`, { headers });
 }
