@@ -1,122 +1,130 @@
-from unittest.mock import patch
-from datetime import date, timedelta
 import pytest
+from datetime import date
+from unittest.mock import patch
 
-# Assuming the default test user created by auth_header fixture has uid = 1.
-DEFAULT_TEST_USER_ID = 1
 
-def test_weekly_summary_unauthenticated(client):
-    """Test that accessing the weekly summary endpoint without authentication returns 401."""
-    r = client.get("/insights/weekly-summary")
-    assert r.status_code == 401
+# Fixtures client and auth_header are from conftest.py
 
 
 @patch("app.services.ai.weekly_financial_summary")
-def test_weekly_summary_authenticated_default_week(mock_weekly_financial_summary, client, auth_header):
-    """
-    Test authenticated access to the weekly summary endpoint with default week (current week).
-    Verify the service function is called correctly and response structure.
-    """
-    # Mock the return value of the service function
+def test_weekly_summary_endpoint(mock_weekly_financial_summary, client, auth_header):
+    # Configure the mock to return a predictable response
     mock_weekly_financial_summary.return_value = {
-        "week_start": "2024-10-07", # Example fixed date for mock
-        "total_spending": 115.0,
-        "income": 100.0,
-        "net_flow": -15.0,
-        "top_categories": [
-            {"category_id": "Groceries", "amount": 65.0},
-            {"category_id": "Dining Out", "amount": 30.0},
+        "year_week": "2023-W10",
+        "total_expenses": 500.00,
+        "total_income": 1500.00,
+        "net_flow": 1000.00,
+        "top_expenses_by_category": [
+            {"category_id": "groceries", "amount": 200.00},
+            {"category_id": "dining_out", "amount": 100.00},
         ],
-        "week_over_week_change_pct": 15.0,
-        "insights": ["AI insight 1", "AI insight 2"],
+        "spending_trend": {
+            "last_week_expenses": 450.00,
+            "change_pct": 11.11,
+            "trend_description": "Spending slightly up.",
+        },
+        "insights": ["Good week!"],
+        "recommendations": [],
         "persona": None,
-        "method": "gemini",
+        "method": "heuristic",
+        "warnings": [],
     }
 
+    # Test without specific week parameter (should use current week by default)
     r = client.get("/insights/weekly-summary", headers=auth_header)
     assert r.status_code == 200
-    summary = r.get_json()
-
-    assert summary["week_start"] == "2024-10-07"
-    assert "insights" in summary
-    assert summary["total_spending"] == 115.0
-    assert summary["income"] == 100.0
-    assert summary["net_flow"] == -15.0
-    assert len(summary["top_categories"]) == 2
-    assert summary["week_over_week_change_pct"] == 15.0
-    assert summary["method"] == "gemini"
-
-    # Verify that the service function was called with the correct arguments (default week_start_str=None)
+    data = r.get_json()
+    assert "year_week" in data
+    assert data["total_expenses"] == 500.00
+    assert data["net_flow"] == 1000.00
     mock_weekly_financial_summary.assert_called_once()
-    call_args, call_kwargs = mock_weekly_financial_summary.call_args
-    assert call_kwargs["uid"] == DEFAULT_TEST_USER_ID
-    assert call_kwargs["week_start_str"] is None
-    assert call_kwargs["gemini_api_key"] is None
-    assert call_kwargs["persona"] is None
+    # Check that uid is an integer (from get_jwt_identity) and week is default
+    args, kwargs = mock_weekly_financial_summary.call_args
+    assert isinstance(args[0], int)  # uid
+    assert args[1].startswith(str(date.today().year))  # year_week, default to current
 
+    mock_weekly_financial_summary.reset_mock()
 
-@patch("app.services.ai.weekly_financial_summary")
-def test_weekly_summary_with_params(mock_weekly_financial_summary, client, auth_header):
-    """
-    Test authenticated access to the weekly summary endpoint with explicit week,
-    Gemini API key, and persona parameters.
-    """
-    mock_weekly_financial_summary.return_value = {
-        "week_start": "2023-01-02", # Example fixed date for mock
-        "total_spending": 200.0,
-        "income": 300.0,
-        "net_flow": 100.0,
-        "top_categories": [],
-        "week_over_week_change_pct": -5.0,
-        "insights": ["Custom AI insight for Investor"],
-        "persona": "Investor",
-        "method": "gemini",
-    }
-
-    # Use a specific Monday date for the test
-    test_date_str = "2023-01-02"  # A Monday
-
+    # Test with specific week parameter
+    test_year_week = "2024-W05"
     r = client.get(
-        f"/insights/weekly-summary?week={test_date_str}",
-        headers={**auth_header, "X-Insight-Persona": "Investor", "X-Gemini-Api-Key": "test-gemini-key"},
+        f"/insights/weekly-summary?week={test_year_week}", headers=auth_header
     )
     assert r.status_code == 200
-    summary = r.get_json()
+    data = r.get_json()
+    assert data["year_week"] == test_year_week
+    mock_weekly_financial_summary.assert_called_once_with(
+        args[0],  # uid (same as before)
+        test_year_week,
+        gemini_api_key=None,
+        persona=None,
+    )
 
-    assert summary["week_start"] == "2023-01-02"
-    assert "Custom AI insight for Investor" in summary["insights"]
-    assert summary["persona"] == "Investor"
-    assert summary["method"] == "gemini"
+    mock_weekly_financial_summary.reset_mock()
 
-    # Verify that the service function was called with the correct arguments
-    mock_weekly_financial_summary.assert_called_once()
-    call_args, call_kwargs = mock_weekly_financial_summary.call_args
-    assert call_kwargs["uid"] == DEFAULT_TEST_USER_ID
-    assert call_kwargs["week_start_str"] == test_date_str
-    assert call_kwargs["gemini_api_key"] == "test-gemini-key"
-    assert call_kwargs["persona"] == "Investor"
-
-
-@patch("app.services.ai.weekly_financial_summary")
-def test_weekly_summary_service_returns_heuristic(mock_weekly_financial_summary, client, auth_header):
-    """
-    Test endpoint when the AI service returns a heuristic summary (e.g., if AI generation fails).
-    """
-    mock_weekly_financial_summary.return_value = {
-        "week_start": (date.today() - timedelta(days=date.today().weekday())).isoformat(),
-        "total_spending": 0.0,
-        "income": 0.0,
-        "net_flow": 0.0,
-        "top_categories": [],
-        "week_over_week_change_pct": 0.0,
-        "insights": ["Could not generate AI insights at this time. Falling back to heuristic."],
-        "persona": None,
-        "method": "heuristic_fallback",
+    # Test with custom headers (gemini_api_key, persona)
+    custom_headers = {
+        **auth_header,
+        "X-Gemini-Api-Key": "test-gemini-key",
+        "X-Insight-Persona": "saver",
     }
-
-    r = client.get("/insights/weekly-summary", headers=auth_header)
+    r = client.get(
+        f"/insights/weekly-summary?week={test_year_week}", headers=custom_headers
+    )
     assert r.status_code == 200
-    summary = r.get_json()
+    data = r.get_json()
+    assert data["persona"] == "saver"  # Mocked response should reflect this
+    mock_weekly_financial_summary.assert_called_once_with(
+        args[0],  # uid
+        test_year_week,
+        gemini_api_key="test-gemini-key",
+        persona="saver",
+    )
 
-    assert summary["method"] == "heuristic_fallback"
-    assert "Could not generate AI insights" in summary["insights"][0]
+    mock_weekly_financial_summary.reset_mock()
+
+    # Test unauthenticated access
+    r = client.get("/insights/weekly-summary")
+    assert r.status_code == 401
+    mock_weekly_financial_summary.assert_not_called()
+
+    mock_weekly_financial_summary.reset_mock()
+
+    # Test with invalid week format (should fallback to default)
+    invalid_week_fmt = "2023_W10" # Invalid format
+    r = client.get(
+        f"/insights/weekly-summary?week={invalid_week_fmt}", headers=auth_header
+    )
+    assert r.status_code == 200
+    data = r.get_json()
+    # It should use the default week if the provided one is invalid
+    assert data["year_week"].startswith(str(date.today().year))
+    mock_weekly_financial_summary.assert_called_once()
+    assert mock_weekly_financial_summary.call_args.kwargs["year_week"].startswith(
+        str(date.today().year)
+    )
+
+    mock_weekly_financial_summary.reset_mock()
+    
+    # Test with valid format but invalid week number (e.g., W00)
+    invalid_week_num = "2023-W00"
+    r = client.get(
+        f"/insights/weekly-summary?week={invalid_week_num}", headers=auth_header
+    )
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["year_week"].startswith(str(date.today().year))
+    mock_weekly_financial_summary.assert_called_once()
+
+    mock_weekly_financial_summary.reset_mock()
+
+    # Test with valid format but invalid year (e.g., year 1000)
+    invalid_year = "1000-W01"
+    r = client.get(
+        f"/insights/weekly-summary?week={invalid_year}", headers=auth_header
+    )
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["year_week"].startswith(str(date.today().year))
+    mock_weekly_financial_summary.assert_called_once()
+
